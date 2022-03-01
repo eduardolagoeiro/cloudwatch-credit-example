@@ -252,7 +252,7 @@ module.exports = async function checkCreditAndPersist(rawcpf, metrics) {
     metrics.setProperty("personal_info", savedResult.personalInfo);
     metrics.setProperty("credit_info", savedResult.creditInfo);
     metrics.setProperty("credit_result", savedResult.creditResult);
-    return savedResult;
+    return savedResult.creditResult;
   }
 
   if (savedResult) metrics.putMetric("retry_calls", 1);

@@ -4,3 +4,4 @@ out.log
 prod.env
 samconfig.toml
 .aws-sam
+.vscode
