@@ -1,3 +1,5 @@
 node_modules
 coverage
 out.log
+prod.env
+samconfig.toml

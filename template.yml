@@ -1,11 +1,17 @@
+Transform: AWS::Serverless-2016-10-31
+
 Globals:
   Function:
-    Runtime: nodejs12.x
-    Timeout: 180
-    Handler: index.handler
     Environment:
       Variables:
-        DATABASE_URL: "mongodb://prod/credit-db"
+        DATABASE_URL: !Ref DATABASEURL
+
+Parameters:
+  DATABASEURL:
+    Type: String
+    Default: mongodb://mongo:27017/credit-db
+    Description: database url
+
 Resources:
   CheckCredit:
     Type: AWS::Serverless::Function

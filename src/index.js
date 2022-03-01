@@ -11,7 +11,7 @@ exports.handler = async (evt, ctx, cb) => {
   const metrics = createMetricsLogger();
   const { time } = timer.create();
 
-  metrics.putDimensions({ Service: "CHECK-CREDIT" });
+  metrics.putDimensions({ Service: "CHECK-CREDIT-SV" });
   metrics.putMetric("total_calls", 1);
 
   try {

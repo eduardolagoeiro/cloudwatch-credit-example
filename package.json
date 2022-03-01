@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon index.js",
     "dev:api": "sam local start-api --env-vars env/local.json -l out.log --docker-network cloudwatch-log_default",
-    "dev:lambda": "sam local start-lambda -l out.log --docker-network host"
+    "dev:lambda": "sam local start-lambda -l out.log --docker-network host",
+    "deploy": "sam deploy --resolve-s3 --stack-name check-credit-example --profile pessoal --region us-east-1"
   },
   "keywords": [],
   "author": "",
