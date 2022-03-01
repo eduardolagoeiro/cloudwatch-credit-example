@@ -3,28 +3,46 @@ const getPersonalInfo = require("../services/personal-info");
 const getCreditInfo = require("../services/credit-info");
 const { getAge } = require("../lib/util");
 const { verifyCpf } = require("../lib/cpf");
+const timer = require("../lib/timer");
+const { Unit } = require("aws-embedded-metrics");
 
 const returnError = (error) => ({
   error,
 });
 
-async function getPersonalInfoOrCache(saved, cpf) {
-  if (saved?.personalInfo) {
-    // cached personal info
-    return saved.personalInfo;
+async function getPersonalInfoOrCache(saved, cpf, metrics) {
+  if (saved?.personalInfo) return saved.personalInfo;
+
+  const { time } = timer.create();
+
+  const result = await getPersonalInfo({ cpf }).catch(returnError);
+
+  if (result?.error) {
+    metrics.putMetric("sv_unavailable", 1);
   }
-  return await getPersonalInfo({ cpf }).catch(returnError);
+
+  metrics.putMetric("sv_personal_info_duration", time(), Unit.Milliseconds);
+
+  return result;
 }
 
-async function getCreditInfoOrCache(saved, cpf, bd) {
-  if (saved?.creditInfo) {
-    // cached credit info
-    return saved.creditInfo;
-  }
-  return await getCreditInfo({
+async function getCreditInfoOrCache(saved, cpf, bd, metrics) {
+  if (saved?.creditInfo) return saved.creditInfo;
+
+  const { time } = timer.create();
+
+  const result = await getCreditInfo({
     cpf,
     birthday: bd,
   }).catch(returnError);
+
+  if (result?.error) {
+    metrics.putMetric("sv_unavailable", 1);
+  }
+
+  metrics.putMetric("sv_credit_info_duration", time(), Unit.Milliseconds);
+
+  return result;
 }
 
 function getUpToTime(debts) {
@@ -53,8 +71,8 @@ function getMonthlyInterest(score) {
   return 3;
 }
 
-async function checkCredit(savedResult, cpf) {
-  const personalInfo = await getPersonalInfoOrCache(savedResult, cpf);
+async function checkCredit(savedResult, cpf, metrics) {
+  const personalInfo = await getPersonalInfoOrCache(savedResult, cpf, metrics);
 
   if (!personalInfo) {
     return {
@@ -63,7 +81,9 @@ async function checkCredit(savedResult, cpf) {
   }
 
   if (personalInfo.error) {
-    console.error(personalInfo.error);
+    metrics.setProperty("is_sv_unavailable", true);
+    metrics.setProperty("sv_unavailable_name", "personal_info");
+    metrics.setProperty("check_credit_error_stack", personalInfo.error.stack);
     return {
       error: {
         msg: personalInfo.error.message,
@@ -108,11 +128,7 @@ async function checkCredit(savedResult, cpf) {
     };
   }
 
-  const creditInfo = await getCreditInfoOrCache(
-    savedResult,
-    cpf,
-    personalInfo.birthday
-  );
+  const creditInfo = await getCreditInfoOrCache(savedResult, cpf, personalInfo.birthday, metrics);
 
   if (!creditInfo) {
     return {
@@ -122,7 +138,9 @@ async function checkCredit(savedResult, cpf) {
   }
 
   if (creditInfo.error) {
-    console.error(creditInfo.error);
+    metrics.setProperty("is_sv_unavailable", true);
+    metrics.setProperty("sv_unavailable_name", "credit_info");
+    metrics.setProperty("check_credit_error_stack", creditInfo.error.stack);
     return {
       personalInfo,
       error: { msg: creditInfo.error.message, scope: "getCreditInfo" },
@@ -164,7 +182,6 @@ async function checkCredit(savedResult, cpf) {
   const monthlyInterest = getMonthlyInterest(creditInfo.score);
 
   return {
-    ...savedResult,
     personalInfo,
     creditInfo,
     creditResult: {
@@ -187,9 +204,7 @@ async function persistResult(col, savedResult, cpf, result) {
     toSave.errors = [];
     if (result.error) toSave.errors.push({ ...result.error, date: new Date() });
 
-    console.log("saving", toSave);
     const { insertedId } = await col.insertOne(toSave);
-    console.log("new credit result", insertedId);
   } else {
     const update = {
       $set: {
@@ -213,17 +228,18 @@ async function persistResult(col, savedResult, cpf, result) {
       update.$push = { errors: { ...result.error, date: new Date() } };
     }
 
-    console.log("updating", update);
     await col.updateOne({ _id: savedResult._id }, update);
-    console.log("credit result updated", savedResult._id);
   }
 }
 
-module.exports = async function checkCreditAndPersist(rawcpf) {
+module.exports = async function checkCreditAndPersist(rawcpf, metrics) {
   const { result: validation, cpf } = verifyCpf(rawcpf);
   if (validation !== "VALID") {
     return { error: { msg: validation, validation: true } };
   }
+
+  metrics.putMetric("valid_calls", 1);
+  metrics.setProperty("cpf", cpf);
 
   const col = await db.getCollection("CheckCreditUser");
 
@@ -232,15 +248,37 @@ module.exports = async function checkCreditAndPersist(rawcpf) {
   });
 
   if (savedResult?.creditResult) {
+    metrics.putMetric("cached_calls", 1);
+    metrics.setProperty("personal_info", savedResult.personalInfo);
+    metrics.setProperty("credit_info", savedResult.creditInfo);
+    metrics.setProperty("credit_result", savedResult.creditResult);
     return savedResult;
   }
 
-  const result = await checkCredit(savedResult, cpf);
-  console.log("checkCreditResult:", result);
+  if (savedResult) metrics.putMetric("retry_calls", 1);
+  metrics.putMetric("new_calls", 1);
+
+  const result = await checkCredit(savedResult, cpf, metrics);
+
+  if (result.personalInfo) metrics.setProperty("personal_info", result.personalInfo);
+  if (result.creditInfo) metrics.setProperty("credit_info", result.creditInfo);
+  if (result.creditResult) metrics.setProperty("credit_result", result.creditResult);
+
+  const isDenied = result?.creditResult?.denied;
+
+  if (isDenied === true) {
+    metrics.putMetric("denied", 1);
+  }
+
+  if (isDenied === false) {
+    metrics.putMetric("approved", 1);
+    metrics.putMetric("monthly_interest", result.creditResult.monthlyInterest);
+  }
 
   await persistResult(col, savedResult, cpf, result);
 
   if (result.error) {
+    metrics.setProperty("check_credit_error", result.error);
     return { error: result.error };
   }
 

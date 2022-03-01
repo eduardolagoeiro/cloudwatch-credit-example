@@ -16,6 +16,7 @@
     "nodemon": "^2.0.15"
   },
   "dependencies": {
+    "aws-embedded-metrics": "^2.0.4",
     "moment": "^2.29.1",
     "mongodb": "^4.4.0"
   }
